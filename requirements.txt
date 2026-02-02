@@ -1,0 +1,65 @@
+numpy
+colorama
+pytest
+rich
+tqdm
+accelerate
+colorlog
+pandas
+transformers
+openai
+torch<=2.8.0
+pytesseract
+
+# t2i & image editing
+diffusers   # in our test, diffusers==0.33.1
+
+# VQA by qwen2.5_VL
+torchvision
+qwen_vl_utils
+
+# Video Pipeline
+appdirs
+opencv-python
+tqdm
+imageio
+einops
+scipy
+matplotlib
+ninja
+numpy
+pandas
+huggingface_hub
+
+scenedetect
+ftfy
+diffusers
+accelerate
+av
+scenedetect
+imageio-ffmpeg
+ffmpeg-python
+nltk
+clip @ git+https://github.com/openai/CLIP.git
+cpbd
+rouge_score
+# paddlepaddle-gpu==3.0.0 --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+paddleocr
+
+# audio
+torchaudio
+soundfile
+llvmlite>=0.40.0
+numba>=0.57.0
+librosa
+
+# image
+ultralytics
+iso639-lang
+pypinyin
+jiwer
+uroman
+imagehash
+
+# data selection
+ray

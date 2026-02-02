@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from typing import List, Optional
+
+import pandas as pd
+
+from dataflow import get_logger
+from dataflow.core import OperatorABC, VLMServingABC
+from dataflow.prompts.video import DiyVideoPrompt, VideoCaptionGeneratorPrompt
+from dataflow.utils.registry import OPERATOR_REGISTRY
+from dataflow.utils.storage import DataFlowStorage
+from dataflow.operators.core_vision.generate.prompted_vqa_generator import PromptedVQAGenerator
+
+
+@OPERATOR_REGISTRY.register()
+class VideoToCaptionGenerator(OperatorABC):
+    """Generate captions from videos by prompting a VLM service.
+
+    This operator rewrites the first user message in each conversation with a
+    template-built prompt, then calls the provided VLM serving to generate
+    captions. The generated captions are written to ``output_key`` (default:
+    ``"caption"``).
+    """
+
+    def __init__(
+        self,
+        vlm_serving: VLMServingABC,
+        prompt_template: Optional[VideoCaptionGeneratorPrompt | DiyVideoPrompt | str] = None,
+    ) -> None:
+        self.logger = get_logger()
+        self.vlm_serving = vlm_serving
+        # Initialize prompt template
+        if prompt_template is None:
+            self.prompt_template: VideoCaptionGeneratorPrompt | DiyVideoPrompt = VideoCaptionGeneratorPrompt()
+        elif isinstance(prompt_template, str):
+            self.prompt_template = DiyVideoPrompt(prompt_template)
+        else:
+            self.prompt_template = prompt_template
+
+    @staticmethod
+    def get_desc(lang: str = "zh") -> str:
+        return "基于 prompt 生成数据" if lang == "zh" else "Generate data from a prompt."
+
+    # ----------------------------- Helpers -----------------------------------
+    def _build_prompts(self, df: pd.DataFrame) -> List[str]:
+        """Build one prompt per row using the configured template.
+
+        Unlike the QA variant, this template does not depend on row fields, so
+        we simply create ``len(df)`` prompts by calling ``build_prompt()``.
+        """
+        return [self.prompt_template.build_prompt() for _ in range(len(df))]
+
+    @staticmethod
+    def _set_first_user_message(conversation: object, value: str) -> object:
+        """Safely set the first user message's 'value' in a conversation.
+
+        Expected format: a list of messages (dicts), where the first item
+        represents the user's message and has a 'value' field.
+        """
+        try:
+            if isinstance(conversation, list) and conversation:
+                first = conversation[0]
+                if isinstance(first, dict) and "value" in first:
+                    first["value"] = value
+        except Exception:
+            # Be defensive but don't fail the whole run
+            pass
+        return conversation
+
+    # ----------------------------- Execution ---------------------------------
+    def run(
+        self,
+        storage: DataFlowStorage,
+        input_image_key: str = "image",
+        input_video_key: str = "video",
+        input_conversation_key: str = "conversation",
+        # 输出的 conversation 可能是 None 也可能是 conversation，请类型检查
+        output_key: str = "caption",
+    ) -> str:
+        if not output_key:
+            raise ValueError("'output_key' must be a non-empty string.")
+
+        self.logger.info("Running VideoToCaptionGenerator ...")
+
+        df: pd.DataFrame = storage.read("dataframe")
+        self.logger.info("Loaded dataframe with %d rows", len(df))
+
+        if input_conversation_key not in df.columns:
+            raise KeyError("Input dataframe must contain a 'conversation' column.")
+
+        prompts = self._build_prompts(df)
+
+        # Rewrite the first user message per conversation to the built prompt.
+        df[input_conversation_key] = [
+            self._set_first_user_message(conv, prompt)
+            for conv, prompt in zip(df[input_conversation_key].tolist(), prompts)
+        ]
+
+        # Write the modified dataframe back to storage
+        storage.write(df)
+
+        # Use PromptedVQAGenerator to generate captions
+        prompted_vqa_generator = PromptedVQAGenerator(
+            serving=self.vlm_serving,
+            system_prompt="You are a helpful assistant."
+        )
+        
+        # Call PromptedVQAGenerator to generate responses
+        output_key_result = prompted_vqa_generator.run(
+            storage=storage.step(),
+            input_image_key=input_image_key,
+            input_video_key=input_video_key,
+            input_conversation_key=input_conversation_key,
+            output_answer_key=output_key,
+        )
+
+        self.logger.info("Generation finished for %d rows", len(df))
+        return output_key_result
